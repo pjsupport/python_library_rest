@@ -1,5 +1,6 @@
 class payjunctionrestlib:
     """ A library containing classes for processing requests on the PayJunction REST API
+        Version: 0.0.5.dev
     """
     
     import requests
@@ -9,6 +10,13 @@ class payjunctionrestlib:
     #Constants for API endpoints
     TRANSACTIONS = "/transactions/"
     CUSTOMERS = "/customers/"
+    NOTES = "{s}/notes/" # All note queries requires the either the customer id or the transaction id, therefore this must be used with a sprintf(NOTES, $cust_id|$txn_id)
+    RECEIPTS = "{s}/receipts/latest/" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
+    RECEIPTS_THERMAL = "{s}/receipts/latest/thermal" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
+    RECEIPTS_FULLPAGE = "{s}/receipts/latest/fullpage" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
+    EMAIL_RECEIPT = "{s}/receipts/latest/email" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
+    ADDRESSES = "{s}/addresses/" # All address queries requires the customer id, therefore this must be used with a sprintf(ADDRESS, $cust_id)
+    VAULTS = "{s}/vaults/" # All vault queries requires the customer id, therefore this must be used with a sprintf(VAULTS, $cust_id)
     
     __login = ""
     __password = ""
