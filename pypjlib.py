@@ -1,6 +1,6 @@
 class payjunctionrestlib:
     """ A library containing classes for processing requests on the PayJunction REST API
-        Version: 0.0.9.dev
+        Version: 0.1.0.dev
     """
     
     
@@ -311,7 +311,23 @@ class payjunctionrestlib:
         
         def get_transaction_id(self):
             return self.__transaction_id
-    
+        
+        def get_amounts(self):
+            return {'amountBase': self.__amount_base, 'amountTax': self.__amount_tax, 'amountShipping': self.__amount_shipping, 
+                    'amountTip': self.__amount_tip, 'amountReject': self.__amount_reject, 'amountTotal': self.__amount_total}
+        
+        def set_amounts(self, a_dict):
+            if 'amountBase' in a_dict: self.__amount_base = a_dict['amountBase']
+            if 'amountTax' in a_dict: self.__amount_tax = a_dict['amountTax']
+            if 'amountShipping' in a_dict: self.__amount_shipping = a_dict['amountShipping']
+            if 'amountTip' in a_dict: self.__amount_tip = a_dict['amountTip']
+            if 'amountReject' in a_dict:
+                if self.__vault is not None and self.__vault['type'] is "ACH":
+                    self.__amount_reject = a_dict['amountReject']
+                else:
+                    raise ValueError("Cannot set an amountReject on this transaction")
+                    
+            
     class Note(object):
         
         __note_id = None
