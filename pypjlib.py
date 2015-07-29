@@ -1,22 +1,28 @@
 class payjunctionrestlib:
     """ A library containing classes for processing requests on the PayJunction REST API
-        Version: 0.0.5.dev
+        Version: 0.0.9.dev
     """
     
-    import requests
-    import json
-    from exceptions import ValueError, KeyError
     
-    #Constants for API endpoints
+    import json
+    from exceptions import ValueError, KeyError, TypeError
+    
+    # Constants for API endpoints
     TRANSACTIONS = "/transactions/"
     CUSTOMERS = "/customers/"
-    NOTES = "{s}/notes/" # All note queries requires the either the customer id or the transaction id, therefore this must be used with a sprintf(NOTES, $cust_id|$txn_id)
-    RECEIPTS = "{s}/receipts/latest/" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
-    RECEIPTS_THERMAL = "{s}/receipts/latest/thermal" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
-    RECEIPTS_FULLPAGE = "{s}/receipts/latest/fullpage" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
-    EMAIL_RECEIPT = "{s}/receipts/latest/email" # All receipt queries requires the transaction id, therefore this must be used with a sprintf(RECEIPTS, $txn_id)
-    ADDRESSES = "{s}/addresses/" # All address queries requires the customer id, therefore this must be used with a sprintf(ADDRESS, $cust_id)
-    VAULTS = "{s}/vaults/" # All vault queries requires the customer id, therefore this must be used with a sprintf(VAULTS, $cust_id)
+    NOTES = "{}/notes/" # All note queries requires the either the customer id or the transaction id, therefore this must be used with a format($cust_id|$txn_id)
+    RECEIPTS = "{}/receipts/latest/" # All receipt queries requires the transaction id, therefore this must be used with a format($txn_id)
+    RECEIPTS_THERMAL = "{}/receipts/latest/thermal" # All receipt queries requires the transaction id, therefore this must be used with a format($txn_id)
+    RECEIPTS_FULLPAGE = "{}/receipts/latest/fullpage" # All receipt queries requires the transaction id, therefore this must be used with a format($txn_id)
+    EMAIL_RECEIPT = "{}/receipts/latest/email" # All receipt queries requires the transaction id, therefore this must be used with a format($txn_id)
+    ADDRESSES = "{}/addresses/" # All address queries requires the customer id, therefore this must be used with a format($cust_id)
+    VAULTS = "{}/vaults/" # All vault queries requires the customer id, therefore this must be used with a format($cust_id)
+    
+    # Constants for verify functions
+    SWIPE_REQUIRED = ("cardSwipe", "amountBase")
+    KEY_REQUIRED = ("cardNumber", "cardExpMonth", "cardExpYear", "amountBase")
+    ACH_REQUIRED = ("achRoutingNumber", "achAccountNumber", "achAccountType", "achType", "amountBase")
+    REQ_LIST = {'swipe': SWIPE_REQUIRED, 'key': KEY_REQUIRED, 'ach': ACH_REQUIRED}
     
     __login = ""
     __password = ""
@@ -29,16 +35,17 @@ class payjunctionrestlib:
         self.__app_key = key
         self.__test = test
         
-    def verify(self, to_test, required):
-        for key in required:
+    def verify(self, to_test, vtype):
+        for key in self.REQ_LIST[vtype]:
             if key not in to_test:
                 raise KeyError(key + " is a required parameter for this transaction type.")
             if not to_test[key]:
                 raise ValueError(key + " cannot be empty or None.")
             
-    def post(self, ptype, data):
+    def __process(self, ptype, method, data=None):
+        import requests
         
-        headers = {"PJ-X-Application-Key" : self.__app_key}
+        headers = {"X-PJ-Application-Key" : self.__app_key}
         auth = requests.auth.HTTPBasicAuth(self.__login, self.__password)
         
         url = ""
@@ -49,8 +56,17 @@ class payjunctionrestlib:
         
         url += ptype
         
-        r = requests.post(url=url, data=data, auth=auth)
-        
+        if (method == 'post'):
+            r = requests.post(url=url, data=data, auth=auth, headers=headers)
+        elif (method == 'put'):
+            r = requests.put(url=url, data=data, auth=auth, headers=headers)
+        elif (method == 'get'):
+            r = requests.get(url=url, auth=auth, headers=headers)
+        elif (method == 'delete'):
+            r = requests.delete(url=url, auth=auth, headers=headers)
+        else:
+            raise ValueError("the method parameter must be either 'post', 'put', 'get' or 'delete'")
+            
         if (r.status_code == requests.codes.ok):
             json_response = r.json()
             raw_response = r.text
@@ -59,17 +75,60 @@ class payjunctionrestlib:
         else:
             r.request = None # Make sure GC clears the memory with the card and authentication info in it as soon as possible
             r.raise_for_status()
+    
+    def post(self, ptype, data):
+        return self.__process(ptype, 'post', data)
+    
+    def put(self, ptype, data):
+        return self.__process(ptype, 'put', data)
+        
+    def get(self, ptype):
+        return self.__process(ptype, 'get')
+    
+    def delete(self, ptype):
+        return self.__process(ptype, 'delete')
+        
+    def enable_test_mode(self):
+        self.__test == True
+    
+    def disable_test_mode(self):
+        self.__test == False
+    
+    def create_transaction(self, params):
+         # Verify we have the required parameters for the transaction type
+        if 'cardNumber' in params:
+            #Verify we have all required fields for a keyed transaction
+            self.verify(params, 'key')
+                
+        elif 'cardTrack' in params:
+            self.verify(params, 'swipe')
+                    
+        elif 'achRoutingNumber' in params:
+            self.verify(params, 'ach')
+        
+        else:
+            raise ValueError('A valid transaction request needs either cardNumber, cardTrack, or achRoutingNumber defined in the parameters to be valid')
+        
+        r = self.post(self.TRANSACTIONS, params)
+        
+        return payjunctionrestlib.Transaction(self, r[0], r[1])
+    
+    def get_transaction(self, txn_id):
+        if txn_id is None or txn_id == "": raise ValueError("A valid transactionId is needed to use get_transaction()")
+        r = self.get(self.TRANSACTIONS + txn_id)
+        return payjunctionrestlib.Transaction(self, r[0], r[1])
         
         
     class Transaction(object):
         
         #Constants for use with create()
-        KEYED = 1
-        SWIPED = 2
-        ACH = 3
+        KEYED = 'key'
+        SWIPED = 'swipe'
+        ACH = 'ach'
         
-        __notes = []
-        __receipts = None
+        __hook = None
+        #__notes = []
+        #__receipts = None
         __transaction_id = 0
         __uri = ""
         __terminal_id = 0
@@ -79,6 +138,7 @@ class payjunctionrestlib:
         __amount_shipping = 0.00
         __amount_tip = 0.00
         __amount_surcharge = 0.00
+        __amount_reject = 0.00
         __amount_total = 0.00
         __invoice_number = ""
         __purchase_order_number = ""
@@ -105,13 +165,17 @@ class payjunctionrestlib:
         }
        
         __settlement = None
-        __vault = {
+        __vault = None
+        
+        """{
             "type" : "",
             "acocuntType": "",
             "lastFour": ""
-            }
+            }"""
 
-        __billing = {
+        __billing = None
+        
+        """{
             "firstName": "",
             "middleName": "",
             "lastName": "",
@@ -129,8 +193,10 @@ class payjunctionrestlib:
                 "country": "",
                 "zip": ""
             }
-        }
-        __shipping = {
+        }"""
+        __shipping = None
+        
+        """{
             "firstName": "",
             "middleName": "",
             "lastName": "",
@@ -148,61 +214,89 @@ class payjunctionrestlib:
                 "country": "",
                 "zip": ""
             }
-        }
+        }"""
         __json = ""
         
-        def __init__(self, notes, receipts, txnid, uri, terid, action, ab, total, 
-        inv, po, status, created, lm, response, settlement, vault, billing, 
-        shipping, js, at=0.00, ash=0.00, atip=0.00, asur=0.00):
-            self.__notes = notes
-            self.__receipts = receipts
-            self.__transaction_id = txnid
-            self.__uri = uri
-            self.__terminal_id = terid
-            self.__action = action
-            self.__amount_base = ab
-            self.__amount_tax = at
-            self.__amount_shipping = ash
-            self.__amount_tip = at
-            self.__amount_surcharge = asur
-            self.__amount_total = total
-            self.__invoice_number = inv
-            self.__purchase_order_number = po
-            self.__status = status
-            self.__created = created
-            self.__last_mod = lm
-            self.__response = response
-            self.__settlement = settlement
-            self.__vault = vault
-            self.__billing = billing
-            self.__shipping = shipping
+        def __init__(self, hook, r_dict, js):
+            self.__hook = hook
+            #self.__notes = notes
+            #self.__receipts = receipts
+            self.__transaction_id = r_dict['transactionId']
+            self.__uri = r_dict['uri']
+            self.__terminal_id = r_dict['terminalId']
+            self.__action = r_dict['action']
+            self.__amount_base = r_dict['amountBase']
+            if 'amountTax' in r_dict: self.__amount_tax = r_dict['amountTax']
+            if 'amountShipping' in r_dict: self.__amount_shipping = r_dict['amountShipping']
+            if 'amountTip' in r_dict: self.__amount_tip = r_dict['amountTip']
+            if 'amountSurcharge' in r_dict: self.__amount_surcharge = r_dict['amountSurcharge']
+            if 'amountReject' in r_dict: self.__amount_reject = r_dict['amountReject']
+            self.__amount_total = r_dict['amountTotal']
+            if 'invoiceNumber' in r_dict: self.__invoice_number = r_dict['invoiceNumber']
+            if 'purchaseOrderNumber' in r_dict: self.__purchase_order_number = r_dict['purchaseOrderNumber']
+            self.__status = r_dict['status']
+            self.__created = r_dict['created']
+            self.__last_mod = r_dict['lastModified']
+            if 'response' in r_dict: self.__response = r_dict['response']
+            if 'settlement' in r_dict: self.__settlement = r_dict['settlement']
+            if 'vault' in r_dict: self.__vault = r_dict['vault']
+            if 'billing' in r_dict: self.__billing = r_dict['billing']
+            if 'shipping' in r_dict: self.__shipping = r_dict['shipping']
             self.__json = js
         
-        def create(self, type_constant, params):
-            #Verify we have the required parameters for the transaction type
-            if (type_constant == self.KEYED):
-                #Verify we have all required fields for a keyed transaction
-                payjunctionrestlib.verify(params, ("cardNumber", "cardExpMonth", "cardExpYear", "amountBase"))
+        def __get_dict(self):
+            txn_dict = {'status': self.__status, 'amountBase': self.__amount_base, 'amountTax': self.__amount_tax, 'amountShipping': self.__amount_shipping, 'amountTip': self.__amount_tip}
+            if self.__vault is not None:
+                if self.__vault['type'] is "ACH": txn_dict['amountReject'] = self.__amount_reject
+            if self.__invoice_number is not "": txn_dict['invoiceNumber'] = self.__invoice_number
+            if self.__purchase_order_number is not "": txn_dict['purchaseOrderNumber'] = self.__purchase_order_number
+            if self.__billing is not None:
+                b = self.__billing
+                if 'firstName' in b: txn_dict['billingFirstName'] = b['firstName']
+                if 'lastName' in b: txn_dict['billingLastName'] = b['lastName']
+                if 'companyName' in b: txn_dict['billingCompanyName'] = b['companyName']
+                if 'email' in b: txn_dict['billingEmail'] = b['email']
+                if 'phone' in b: txn_dict['billingPhone'] = b['phone']
+                if 'phone2' in b: txn_dict['billingPhone2'] = b['phone2']
+                if 'jobTitle' in b: txn_dict['billingJobTitle'] = b['jobTitle']
+                if 'identifier' in b: txn_dict['billingIdentifier'] = b['identifier']
+                if 'website' in b: txn_dict['billingWebsite'] = b['website']
+                if 'address' in b:
+                    a = b['address']
+                    if 'address' in a: txn_dict['billingAddress'] = a['address']
+                    if 'city' in a: txn_dict['billingCity'] = a['city']
+                    if 'state' in a: txn_dict['billingState'] = a['state']
+                    if 'country' in a: txn_dict['billingCountry'] = a['country']
+                    if 'zip' in a: txn_dict['billingZip'] = a['zip']
+            if self.__shipping is not None:
+                b = self.__shipping
+                if 'firstName' in b: txn_dict['shippingFirstName'] = b['firstName']
+                if 'lastName' in b: txn_dict['shippingLastName'] = b['lastName']
+                if 'companyName' in b: txn_dict['shippingCompanyName'] = b['companyName']
+                if 'email' in b: txn_dict['shippingEmail'] = b['email']
+                if 'phone' in b: txn_dict['shippingPhone'] = b['phone']
+                if 'phone2' in b: txn_dict['shippingPhone2'] = b['phone2']
+                if 'jobTitle' in b: txn_dict['shippingJobTitle'] = b['jobTitle']
+                if 'identifier' in b: txn_dict['shippingIdentifier'] = b['identifier']
+                if 'website' in b: txn_dict['shippingWebsite'] = b['website']
+                if 'address' in b:
+                    a = b['address']
+                    if 'address' in a: txn_dict['shippingAddress'] = a['address']
+                    if 'city' in a: txn_dict['shippingCity'] = a['city']
+                    if 'state' in a: txn_dict['shippingState'] = a['state']
+                    if 'country' in a: txn_dict['shippingCountry'] = a['country']
+                    if 'zip' in a: txn_dict['shippingZip'] = a['zip']
+            
+            
+            return txn_dict
                     
-            elif type_constant == self.SWIPED:
-                payjunctionrestlib.verify(params, ("cardSwipe", "amountBase"))
-                        
-            elif type_constant == self.ACH:
-                payjunctionrestlib.verify(params, ("achRoutingNumber", "achAccountNumber", "achAccountType", "achType", "amountBase"))
-            
-            else:
-                raise ValueError(type_constant + " is not valid for type_constant")
-            
-            
-             
-        def get(self, t_id):
-            #TODO
-            pass
         
         def update(self):
-            #TODO
-            pass
-        
+            if self.__hook is not None:
+                self.__hook.put(payjunctionrestlib.TRANSACTIONS + self.__transaction_id, self.__get_dict())
+            else:
+                raise TypeError("The payjunctionrestlib object is no longer available")
+            
         def recharge(self, amount=None):
             #TODO
             pass
@@ -214,6 +308,9 @@ class payjunctionrestlib:
         def refund(self):
             #TODO
             pass
+        
+        def get_transaction_id(self):
+            return self.__transaction_id
     
     class Note(object):
         
