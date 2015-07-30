@@ -1,6 +1,6 @@
 class payjunctionrestlib:
     """ A library containing classes for processing requests on the PayJunction REST API
-        Version: 0.1.0.dev
+        Version: 0.1.1.dev
     """
     
     
@@ -125,7 +125,7 @@ class payjunctionrestlib:
         KEYED = 'key'
         SWIPED = 'swipe'
         ACH = 'ach'
-        
+        __is_synced = True
         __hook = None
         #__notes = []
         #__receipts = None
@@ -294,6 +294,7 @@ class payjunctionrestlib:
         def update(self):
             if self.__hook is not None:
                 self.__hook.put(payjunctionrestlib.TRANSACTIONS + self.__transaction_id, self.__get_dict())
+                self.__is_synced = True
             else:
                 raise TypeError("The payjunctionrestlib object is no longer available")
             
@@ -312,12 +313,22 @@ class payjunctionrestlib:
         def get_transaction_id(self):
             return self.__transaction_id
         
+        def amount_check(self, amount):
+            if type(amount) is type("") or type(amount) is type(1) or type(amount) is type(1.00):
+                return True
+            else:
+                raise ValueError("Amount must be of type string, integer or float. You submitted a {} object".format(type(amount)))
+        
         def get_amounts(self):
             return {'amountBase': self.__amount_base, 'amountTax': self.__amount_tax, 'amountShipping': self.__amount_shipping, 
                     'amountTip': self.__amount_tip, 'amountReject': self.__amount_reject, 'amountTotal': self.__amount_total}
         
         def set_amounts(self, a_dict):
+            for key in a_dict:
+                # This will raise an exception if it doesn't pass
+                self.amount_check(a_dict[key])
             if 'amountBase' in a_dict: self.__amount_base = a_dict['amountBase']
+            self.__is_synced = False
             if 'amountTax' in a_dict: self.__amount_tax = a_dict['amountTax']
             if 'amountShipping' in a_dict: self.__amount_shipping = a_dict['amountShipping']
             if 'amountTip' in a_dict: self.__amount_tip = a_dict['amountTip']
@@ -326,7 +337,48 @@ class payjunctionrestlib:
                     self.__amount_reject = a_dict['amountReject']
                 else:
                     raise ValueError("Cannot set an amountReject on this transaction")
-                    
+        
+        def get_amount_base(self):
+            return self.__amount_base
+            
+        def set_amount_base(self, amount):
+            if self.amount_check(amount): 
+                self.__amount_base = amount
+                self.__is_synced = False
+            
+        def get_amount_tax(self):
+            return self.__amount_tax
+            
+        def set_amount_tax(self, amount):
+            if self.amount_check(amount): 
+                self.__amount_tax = amount
+                self.__is_synced = False
+        
+        def get_amount_shipping(self):
+            return self.__amount_shipping
+        
+        def set_amount_shipping(self, amount):
+            if self.amount_check(amount): 
+                self.__amount_shipping = amount
+                self.__is_synced = False
+        
+        def get_amount_tip(self):
+            return self.__amount_tip
+            
+        def set_amount_tip(self, amount):
+            if self.amount_check(amount): 
+                self.__amount_tip = amount
+                self.__is_synced = False
+        
+        def get_amount_reject(self):
+            return self.__amount_reject
+            
+        def set_amount_reject(self, amount):
+            if self.amount_check(amount) and self.__vault['Type'] is "ACH": 
+                self.__amount_reject = amount
+                self.__is_synced = False
+        
+        
             
     class Note(object):
         
