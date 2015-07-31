@@ -1,11 +1,11 @@
 class payjunctionrestlib:
     """ A library containing classes for processing requests on the PayJunction REST API
-        Version: 0.1.1.dev
+        Version: 0.1.2.dev
     """
     
     
     import json
-    from exceptions import ValueError, KeyError, TypeError
+    from exceptions import ValueError, KeyError, TypeError, RuntimeError
     
     # Constants for API endpoints
     TRANSACTIONS = "/transactions/"
@@ -23,6 +23,19 @@ class payjunctionrestlib:
     KEY_REQUIRED = ("cardNumber", "cardExpMonth", "cardExpYear", "amountBase")
     ACH_REQUIRED = ("achRoutingNumber", "achAccountNumber", "achAccountType", "achType", "amountBase")
     REQ_LIST = {'swipe': SWIPE_REQUIRED, 'key': KEY_REQUIRED, 'ach': ACH_REQUIRED}
+    
+    # Other Constants
+    CONTACT_PARAMS = ('firstname', 'middleName', 'lastName', 'companyName', 'email', 'phone', 'phone2', 'jobTitle', 'identifier', 'website')
+    ADDR_PARAMS = ('address', 'city', 'state', 'country', 'zip')
+    BILLING_CONV = {'firstName': 'billingFirstName', 'middleName': 'billingMiddleName', 'lastName': 'billingLastName', 'jobTitle': 'billingJobTitle', 
+                    'companyName': 'billingCompanyName', 'phone': 'billingPhone', 'phone2': 'billingPhone2', 'address': 'billingAddress', 
+                    'city': 'billingCity', 'state': 'billingState', 'zip': 'billingZip', 'country': 'billingCountry', 'email': 'billingEmail', 
+                    'website': 'billingWebsite'}
+    
+    SHIPPING_CONV = {'website': 'shippingWebsite', 'city': 'shippingCity', 'zip': 'shippingZip', 'firstName': 'shippingFirstName', 
+                     'companyName': 'shippingCompanyName', 'phone2': 'shippingPhone2', 'jobTitle': 'shippingJobTitle', 'lastName': 'shippingLastName', 
+                     'middleName': 'shippingMiddleName', 'phone': 'shippingPhone', 'state': 'shippingState', 'address': 'shippingAddress', 
+                     'country': 'shippingCountry', 'email': 'shippingEmail'}
     
     __login = ""
     __password = ""
@@ -114,17 +127,25 @@ class payjunctionrestlib:
         return payjunctionrestlib.Transaction(self, r[0], r[1])
     
     def get_transaction(self, txn_id):
-        if txn_id is None or txn_id == "": raise ValueError("A valid transactionId is needed to use get_transaction()")
+        if txn_id is None or txn_id is "": raise ValueError("A valid transactionId is needed to use get_transaction()")
         r = self.get(self.TRANSACTIONS + txn_id)
         return payjunctionrestlib.Transaction(self, r[0], r[1])
         
         
     class Transaction(object):
         
-        #Constants for use with create()
+        # Constants for use with create()
         KEYED = 'key'
         SWIPED = 'swipe'
         ACH = 'ach'
+        
+        # Transaction class specific constants
+        STATUS = ("HOLD", "CAPTURE", "VOID")
+        ACTION = ("CHARGE", "REFUND")
+        AVS = ("ADDRESS", "ZIP", "ADDRESS_AND_ZIP", "ADDRESS_OR_ZIP", "BYPASS", "OFF")
+        CVV = ("ON", "OFF")
+        ACH_TYPE = ("PPD", "CCD", "TEL")
+        
         __is_synced = True
         __hook = None
         #__notes = []
@@ -132,6 +153,7 @@ class payjunctionrestlib:
         __transaction_id = 0
         __uri = ""
         __terminal_id = 0
+        __ach_type = ""
         __action = ""
         __amount_base = 0.00
         __amount_tax = 0.00
@@ -145,76 +167,11 @@ class payjunctionrestlib:
         __status = ""
         __created = None
         __last_mod = None
-        __response = {
-            "approved": None,
-            "code": "",
-            "message": "",
-            "processor": {
-                "authorized": None,
-                "approvalCode": "",
-                "avs": {
-                   "status": "",
-                   "requested": "",
-                   "match": {
-                       "ZIP": None,
-                       "ADDRESS": None
-                   }
-                },
-                "cvv": ""
-            }
-        }
-       
+        __response = None
         __settlement = None
         __vault = None
-        
-        """{
-            "type" : "",
-            "acocuntType": "",
-            "lastFour": ""
-            }"""
-
         __billing = None
-        
-        """{
-            "firstName": "",
-            "middleName": "",
-            "lastName": "",
-            "companyName": "",
-            "email": "",
-            "phone": "",
-            "phone2": "",
-            "jobTitle": "",
-            "identifier": "",
-            "website": "",
-            "address": {
-                "address": "",
-                "city": "",
-                "state": "",
-                "country": "",
-                "zip": ""
-            }
-        }"""
         __shipping = None
-        
-        """{
-            "firstName": "",
-            "middleName": "",
-            "lastName": "",
-            "companyName": "",
-            "email": "",
-            "phone": "",
-            "phone2": "",
-            "jobTitle": "",
-            "identifier": "",
-            "website": "",
-            "address": {
-                "address": "",
-                "city": "",
-                "state": "",
-                "country": "",
-                "zip": ""
-            }
-        }"""
         __json = ""
         
         def __init__(self, hook, r_dict, js):
@@ -242,52 +199,29 @@ class payjunctionrestlib:
             if 'vault' in r_dict: self.__vault = r_dict['vault']
             if 'billing' in r_dict: self.__billing = r_dict['billing']
             if 'shipping' in r_dict: self.__shipping = r_dict['shipping']
+            if 'achType' in r_dict: self.__ach_type = r_dict['achType']
             self.__json = js
         
         def __get_dict(self):
             txn_dict = {'status': self.__status, 'amountBase': self.__amount_base, 'amountTax': self.__amount_tax, 'amountShipping': self.__amount_shipping, 'amountTip': self.__amount_tip}
             if self.__vault is not None:
-                if self.__vault['type'] is "ACH": txn_dict['amountReject'] = self.__amount_reject
+                if self.__vault['type'] is "ACH": 
+                    txn_dict['amountReject'] = self.__amount_reject
+                    txn_dict['achType'] = self.__ach_type
             if self.__invoice_number is not "": txn_dict['invoiceNumber'] = self.__invoice_number
             if self.__purchase_order_number is not "": txn_dict['purchaseOrderNumber'] = self.__purchase_order_number
             if self.__billing is not None:
+                bc = payjunctionrestlib.BILLING_CONV 
                 b = self.__billing
-                if 'firstName' in b: txn_dict['billingFirstName'] = b['firstName']
-                if 'lastName' in b: txn_dict['billingLastName'] = b['lastName']
-                if 'companyName' in b: txn_dict['billingCompanyName'] = b['companyName']
-                if 'email' in b: txn_dict['billingEmail'] = b['email']
-                if 'phone' in b: txn_dict['billingPhone'] = b['phone']
-                if 'phone2' in b: txn_dict['billingPhone2'] = b['phone2']
-                if 'jobTitle' in b: txn_dict['billingJobTitle'] = b['jobTitle']
-                if 'identifier' in b: txn_dict['billingIdentifier'] = b['identifier']
-                if 'website' in b: txn_dict['billingWebsite'] = b['website']
-                if 'address' in b:
-                    a = b['address']
-                    if 'address' in a: txn_dict['billingAddress'] = a['address']
-                    if 'city' in a: txn_dict['billingCity'] = a['city']
-                    if 'state' in a: txn_dict['billingState'] = a['state']
-                    if 'country' in a: txn_dict['billingCountry'] = a['country']
-                    if 'zip' in a: txn_dict['billingZip'] = a['zip']
+                for param in bc:
+                    if param in b or param in b['address']: txn_dict[bc[param]] = b[param]
+                
             if self.__shipping is not None:
-                b = self.__shipping
-                if 'firstName' in b: txn_dict['shippingFirstName'] = b['firstName']
-                if 'lastName' in b: txn_dict['shippingLastName'] = b['lastName']
-                if 'companyName' in b: txn_dict['shippingCompanyName'] = b['companyName']
-                if 'email' in b: txn_dict['shippingEmail'] = b['email']
-                if 'phone' in b: txn_dict['shippingPhone'] = b['phone']
-                if 'phone2' in b: txn_dict['shippingPhone2'] = b['phone2']
-                if 'jobTitle' in b: txn_dict['shippingJobTitle'] = b['jobTitle']
-                if 'identifier' in b: txn_dict['shippingIdentifier'] = b['identifier']
-                if 'website' in b: txn_dict['shippingWebsite'] = b['website']
-                if 'address' in b:
-                    a = b['address']
-                    if 'address' in a: txn_dict['shippingAddress'] = a['address']
-                    if 'city' in a: txn_dict['shippingCity'] = a['city']
-                    if 'state' in a: txn_dict['shippingState'] = a['state']
-                    if 'country' in a: txn_dict['shippingCountry'] = a['country']
-                    if 'zip' in a: txn_dict['shippingZip'] = a['zip']
-            
-            
+                sc = payjunctionrestlib.SHIPPING_CONV
+                s = self.__shipping
+                for param in sc:
+                    if param in s or param in s['address']: txn_dict[sc[param]] = s[param]
+                    
             return txn_dict
                     
         
@@ -374,10 +308,49 @@ class payjunctionrestlib:
             return self.__amount_reject
             
         def set_amount_reject(self, amount):
-            if self.amount_check(amount) and self.__vault['Type'] is "ACH": 
+            if self.amount_check(amount) and self.__vault['type'] is "ACH": 
                 self.__amount_reject = amount
                 self.__is_synced = False
+        def get_status(self):
+            return self.__status
         
+        def set_status(self, status):
+            if status.upper() in self.STATUS and not self.__settlement['settled']:
+                self.__status = status
+                self.__is_synced = False
+        
+        def get_ach_type(self):
+            return self.__ach_type
+        
+        def set_ach_type(self, ach_type):
+            if self.__vault['type'] is "ACH":
+                if ach_type.upper() in self.ACH_TYPE:
+                    self.__ach_type = ach_type
+                    self.__is_synced = False
+                else:
+                    raise ValueError("The ACH type must be one of the following: " + ", ".join(self.ACH_TYPE))
+            else:
+                raise RuntimeError("Cannot set an ACH type on a non-ACH transaction")
+        
+        def get_billing_info(self):
+            return self.__billing
+        
+        def set_billing_info(self, b_dict):
+            for param in payjunctionrestlib.CONTACT_PARAMS:
+                if param in b_dict: self.__billing[param] = b_dict[param]
+            for param in payjunctionrestlib.ADDR_PARAMS:
+                if param in b_dict: self.__billing['address'][param] = b_dict[param]
+            self.__is_synced = False
+            
+        def get_shipping_info(self):
+            return self.__shipping
+            
+        def set_shipping_info(self, s_dict):
+            for param in payjunctionrestlib.CONTACT_PARAMS:
+               if param in s_dict: self.__shipping[param] = s_dict[param]
+            for param in payjunctionrestlib.ADDR_PARAMS:
+               if param in s_dict: self.__shipping['address'][param] = s_dict[param]
+            self.__is_synced = False
         
             
     class Note(object):
