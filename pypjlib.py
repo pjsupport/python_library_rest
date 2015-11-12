@@ -119,6 +119,8 @@ class payjunctionrestlib:
         elif 'achRoutingNumber' in params:
             self.verify(params, 'ach')
         
+        elif 'transactionId' in params or 'vaultId' in params:
+            pass
         else:
             raise ValueError('A valid transaction request needs either cardNumber, cardTrack, or achRoutingNumber defined in the parameters to be valid')
         
@@ -131,6 +133,7 @@ class payjunctionrestlib:
         r = self.get(self.TRANSACTIONS + txn_id)
         return payjunctionrestlib.Transaction(self, r[0], r[1])
         
+    
         
     class Transaction(object):
         
@@ -145,6 +148,7 @@ class payjunctionrestlib:
         AVS = ("ADDRESS", "ZIP", "ADDRESS_AND_ZIP", "ADDRESS_OR_ZIP", "BYPASS", "OFF")
         CVV = ("ON", "OFF")
         ACH_TYPE = ("PPD", "CCD", "TEL")
+        AMOUNTS = ("amountBase", "amountTax", "amountShipping", "amountTip", "amountSurcharge", "amountReject")
         
         __is_synced = True
         __hook = None
@@ -232,17 +236,29 @@ class payjunctionrestlib:
             else:
                 raise TypeError("The payjunctionrestlib object is no longer available")
             
-        def recharge(self, amount=None):
-            #TODO
-            pass
-            
+        def recharge(self, amount={}):
+            if self.__hook is not None:
+                d_dict = {"transactionId": self.__transaction_id} 
+                if len(amount) > 0:
+                    for key in amount:
+                        d_dict[key] = amount[key]
+                return self.__hook.create_transaction(d_dict)
+            else:
+                raise TypeError("The payjunctionrestlib object is no longer available")
+                
         def void(self):
-            #TODO
-            pass
-            
-        def refund(self):
-            #TODO
-            pass
+            self.__status = "VOID"
+            self.update()
+                
+        def refund(self, amount={}):
+            if self.__hook is not None:
+                d_dict = {"transactionId": self.__transaction_id, "action": "REFUND"}
+                if len(amount):
+                    for key in amount:
+                        d_dict[key] = amount[key]
+                return self.__hook.create_transaction(d_dict)
+            else:
+                raise TypeError("The payjunctionrestlib object is no longer available")
         
         def get_transaction_id(self):
             return self.__transaction_id
@@ -261,8 +277,8 @@ class payjunctionrestlib:
             for key in a_dict:
                 # This will raise an exception if it doesn't pass
                 self.amount_check(a_dict[key])
-            if 'amountBase' in a_dict: self.__amount_base = a_dict['amountBase']
             self.__is_synced = False
+            if 'amountBase' in a_dict: self.__amount_base = a_dict['amountBase']
             if 'amountTax' in a_dict: self.__amount_tax = a_dict['amountTax']
             if 'amountShipping' in a_dict: self.__amount_shipping = a_dict['amountShipping']
             if 'amountTip' in a_dict: self.__amount_tip = a_dict['amountTip']
@@ -352,12 +368,39 @@ class payjunctionrestlib:
                if param in s_dict: self.__shipping['address'][param] = s_dict[param]
             self.__is_synced = False
         
+        def get_notes(self):
+            if self.__hook is not None:
+                n_list = [];
+                notes = self.__hook.get(payjunctionrestlib.TRANSACTIONS + payjunctionrestlib.NOTES.format(self.__transaction_id))
+                for note in notes:
+                    n_list.append(payjunctionrestlib.Note(note['noteId'], note['uri'], note['note'], note['created'], note['lastModified'], note['user']))
+                return n_list
+            else:
+                raise TypeError("The payjunctionrestlib object is no longer available")
+        
+        def add_note(self, note):
+            if self.__hook is not None:
+                self.__hook.post(payjunctionrestlib.TRANSACTIONS + payjunctionrestlib.NOTES.format(self.__transaction_id), {'note': note})
+            else:
+                raise TypeError("The payjunctionrestlib object is no longer available")
+         
+        def get_receipts(self):
+            if self.__hook is not None:
+                receipts = self.__hook.get(payjunctionrestlib.TRANSACTIONS + payjunctionrestlib.RECEIPTS.format(self.__transaction_id) + "/latest")
+                return payjunctionrestlib.Receipts(receipts['uri'], receipts['signatureStatus'], receipts['terms'], receipts['signatureUpToDate'], receipts['signature'],
+                                                    receipts['documents'], receipts['actions'], receipts['created'], receipts['lastModified'])
+            else:
+                raise TypeError("The payjunctionrestlib object is not longer available")
+                
+        def get_fullpage_receipt(self):
+            if self.__hook is not None:
+                return self.__hook.get(payjunctionrestlib.TRANSACTIONS + payjunctionrestlib.RECEIPTS
             
     class Note(object):
         
         __note_id = None
         __uri = None
-        text = None
+        __text = ""
         __created = None
         __last_mod = None
         __user = None
@@ -365,14 +408,10 @@ class payjunctionrestlib:
         def __init__(self, n_id, uri, text, created, lm, user):
             self.__note_id = n_id
             self.__uri = uri
-            self.text = text
+            self.__text = text
             self.__created = created
             self.__last_mod = lm
             self.__user = user
-        
-        def create(self, note):
-            #TODO
-            pass
         
         def get(self, n_id):
             #TODO
@@ -392,6 +431,9 @@ class payjunctionrestlib:
         
         def user(self):
             return self.__user
+        
+        def text(self):
+            return self.__text
         
     class  Receipts(object):
         
@@ -453,52 +495,44 @@ class payjunctionrestlib:
         
     class Customer(object):
         
-        __instance = None
+        __hook = None
         __customer_id = None
         __uri = None
-        first_name = None
-        last_name = None
-        company_name = None
-        email = None
-        phone = None
-        phone2 = None
-        job_title = None
-        identifier = None
-        website = None
-        custom1 = None
+        __first_name = None
+        __last_name = None
+        __company_name = None
+        __email = None
+        __phone = None
+        __phone2 = None
+        __job_title = None
+        __identifier = None
+        __website = None
+        __custom1 = None
         __created = None
         __last_mod = None
         __addresses = None
         __default_address = None
         __vaults = None
         
-        def __init__(self, instance, c_id, uri, first, last, company, email, phone, phone2, job, ident, web, custom, created, lm, addresses, default, vaults):
-            self.__instance = instance
+        def __init__(self, hook, c_id, uri, first, last, company, email, phone, phone2, job, ident, web, custom, created, lm, addresses, default, vaults):
+            self.__hook = hook
             self.__customer_id = c_id
             self.__uri = uri
-            self.first_name = first
-            self.last_name = last
-            self.company_name = company
-            self.email = email
-            self.phone = phone
-            self.phone2 = phone2
-            self.job_title = job
-            self.identifier = ident
-            self.website = web
-            self.custom1 = custom
+            self.__first_name = first
+            self.__last_name = last
+            self.__company_name = company
+            self.__email = email
+            self.__phone = phone
+            self.__phone2 = phone2
+            self.__job_title = job
+            self.__identifier = ident
+            self.__website = web
+            self.__custom1 = custom
             self.__created = created
             self.__last_mod = lm
             self.__addresses = addresses
             self.__default_address = default
             self.__vaults = vaults
-        
-        def create(self, first="", last="", company="", email="", phone="", phone2="", job="", web="", custom=""):
-            #TODO
-            pass
-        
-        def get(self, id):
-            #TODO
-            pass
         
         def update(self):
             #TODO
